@@ -80,6 +80,14 @@ def main() -> None:
     scrape_parser.add_argument("--headed", action="store_true", help="Run browsers in headed mode")
     scrape_parser.add_argument("--out-dir", default="", help="Optional output directory")
     scrape_parser.add_argument("--zhihu-cookie", default="", help="Optional Zhihu cookie override")
+    scrape_parser.add_argument("--max-items", type=int, default=0, help="Optional max result count")
+    scrape_parser.add_argument("--max-scrolls", type=int, default=0, help="Optional max scroll rounds")
+    scrape_parser.add_argument("--no-new-stop", type=int, default=0, help="Stop after N rounds with no new results")
+    scrape_parser.add_argument("--scroll-pause", type=int, default=0, help="X scraping pause in ms")
+    scrape_parser.add_argument("--page-delay-ms", type=int, default=0, help="Zhihu page delay in ms")
+    scrape_parser.add_argument("--detail-delay-ms", type=int, default=0, help="Zhihu detail delay in ms")
+    scrape_parser.add_argument("--detail-limit", type=int, default=-1, help="Limit Zhihu detail hydration count")
+    scrape_parser.add_argument("--stage1-only", action="store_true", help="Zhihu only: collect search results without hydrating details")
 
     args = parser.parse_args()
     if not args.command:
@@ -261,6 +269,14 @@ def _cmd_scrape_social(args: argparse.Namespace) -> None:
         headless=not args.headed,
         out_dir=args.out_dir or None,
         zhihu_cookie=args.zhihu_cookie or None,
+        max_items=args.max_items or None,
+        max_scrolls=args.max_scrolls or None,
+        no_new_stop=args.no_new_stop or None,
+        scroll_pause=args.scroll_pause or None,
+        page_delay_ms=args.page_delay_ms or None,
+        detail_delay_ms=args.detail_delay_ms or None,
+        detail_limit=None if args.detail_limit < 0 else args.detail_limit,
+        stage1_only=args.stage1_only,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
