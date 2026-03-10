@@ -151,6 +151,12 @@ git clone https://github.com/hanchihuang/search-openclaw.git && cd search-opencl
 git clone https://github.com/hanchihuang/search-openclaw.git && cd search-openclaw && BRAVE_API_KEY="<YOUR_KEY>" ZHIHU_COOKIE="<YOUR_COOKIE>" SMOKE_TEST=1 ./scripts/install.sh
 ```
 
+如果你还想在安装完成后立刻进入 `X` 登录流程，可以直接：
+
+```bash
+git clone https://github.com/hanchihuang/search-openclaw.git && cd search-openclaw && BRAVE_API_KEY="<YOUR_KEY>" ZHIHU_COOKIE="<YOUR_COOKIE>" SMOKE_TEST=1 LOGIN_X=1 ./scripts/install.sh
+```
+
 这个脚本会自动完成：
 
 - 创建 `.venv`
@@ -167,6 +173,23 @@ git clone https://github.com/hanchihuang/search-openclaw.git && cd search-opencl
 ./scripts/start.sh doctor
 ./scripts/start.sh search "OpenClaw 搜索配置建议"
 ./scripts/start.sh scrape-social "AI Agent" --platform both
+```
+
+## OpenClaw 用户复制即用
+
+如果你是典型的 OpenClaw 用户，直接按这个顺序复制就行：
+
+```bash
+git clone https://github.com/hanchihuang/search-openclaw.git && cd search-openclaw && BRAVE_API_KEY="<YOUR_KEY>" SMOKE_TEST=1 ./scripts/install.sh
+./scripts/start.sh login-x
+./scripts/start.sh scrape-social "AI Agent" --platform x --max-items 200 --max-scrolls 80
+./scripts/start.sh scrape-social "AI Agent" --platform zhihu --max-items 220 --max-scrolls 160 --no-new-stop 24 --page-delay-ms 1300 --stage1-only
+```
+
+如果你已经有知乎 Cookie，可以把第一条直接改成：
+
+```bash
+git clone https://github.com/hanchihuang/search-openclaw.git && cd search-openclaw && BRAVE_API_KEY="<YOUR_KEY>" ZHIHU_COOKIE="<YOUR_COOKIE>" SMOKE_TEST=1 ./scripts/install.sh
 ```
 
 如果你只想复制已经验证过的命令，优先用这两条：

@@ -50,6 +50,12 @@ if [ "${SMOKE_TEST:-0}" = "1" ]; then
   fi
 fi
 
+if [ "${LOGIN_X:-0}" = "1" ]; then
+  echo
+  echo "==> Starting X login flow"
+  search-openclaw login-x
+fi
+
 cat <<'EOF'
 
 Install complete.
@@ -64,4 +70,5 @@ Try these next:
 Or use the wrapper:
   ./scripts/start.sh doctor
   ./scripts/start.sh search "OpenClaw search setup"
+  LOGIN_X=1 ./scripts/install.sh
 EOF
