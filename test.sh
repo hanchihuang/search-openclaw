@@ -9,7 +9,10 @@ import sys
 from pathlib import Path
 
 root = Path(sys.argv[1])
-md_files = sorted(root.rglob("*.md"))
+skip_parts = {"output", ".git", ".pytest_cache", "__pycache__"}
+md_files = sorted(
+    path for path in root.rglob("*.md") if not any(part in skip_parts for part in path.relative_to(root).parts)
+)
 if not md_files:
     raise SystemExit("No markdown files found")
 

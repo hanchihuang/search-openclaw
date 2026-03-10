@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from datetime import datetime
+from html import unescape
 from pathlib import Path
 from urllib.parse import quote
 
@@ -27,6 +29,23 @@ from search_openclaw.social.zhihu_helpers import (
 CONTENT_URL_RE = re.compile(
     r"^https?://(?:www\.zhihu\.com/question/\d+(?:/answer/\d+)?|zhuanlan\.zhihu\.com/p/\d+)(?:[/?#].*)?$"
 )
+
+
+def make_absolute_content_url(value: str) -> str:
+    raw = unescape(str(value or "")).strip()
+    if not raw:
+        return ""
+    if raw.startswith("//"):
+        raw = f"https:{raw}"
+    elif raw.startswith("/question/"):
+        raw = f"https://www.zhihu.com{raw}"
+    elif raw.startswith("/p/"):
+        raw = f"https://zhuanlan.zhihu.com{raw}"
+    elif raw.startswith("question/"):
+        raw = f"https://www.zhihu.com/{raw}"
+    elif raw.startswith("p/"):
+        raw = f"https://zhuanlan.zhihu.com/{raw}"
+    return canonical_url(raw)
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,21 +83,33 @@ def detect_content_type(url: str) -> str:
 
 def collect_result_candidates(page) -> list[dict]:
     return page.eval_on_selector_all(
-        "a[href]",
+        "a[href], [data-za-detail-view-path-module], [data-za-detail-view-element_name]",
         """
         elements => {
           const out = [];
-          for (const a of elements) {
-            const href = a.href || "";
+          for (const el of elements) {
+            const a = el.tagName === 'A' ? el : (el.querySelector && el.querySelector('a[href]'));
+            const href = (a && a.href) || "";
             if (!href) continue;
             if (!/^https?:\\/\\//.test(href)) continue;
             const card =
-              a.closest('[class*="SearchResult"]') ||
-              a.closest('[class*="List-item"]') ||
-              a.closest('article') ||
-              a.closest('section') ||
-              a.parentElement;
-            const title = (a.textContent || "").replace(/\\s+/g, " ").trim();
+              (a && a.closest && (
+                a.closest('[class*="SearchResult"]') ||
+                a.closest('[class*="List-item"]') ||
+                a.closest('[class*="ContentItem"]') ||
+                a.closest('[class*="Card"]') ||
+                a.closest('article') ||
+                a.closest('section')
+              )) ||
+              (el.closest && (
+                el.closest('[class*="SearchResult"]') ||
+                el.closest('[class*="List-item"]') ||
+                el.closest('[class*="ContentItem"]') ||
+                el.closest('[class*="Card"]')
+              )) ||
+              a?.parentElement ||
+              el.parentElement;
+            const title = (((a && a.textContent) || el.textContent || "")).replace(/\\s+/g, " ").trim();
             const context = (card?.innerText || "").replace(/\\s+/g, " ").trim();
             out.push({ href, title, context });
           }
@@ -88,13 +119,178 @@ def collect_result_candidates(page) -> list[dict]:
     )
 
 
-def extract_search_results(page, max_items: int, max_scrolls: int, no_new_stop: int, page_delay_ms: int) -> list[dict]:
+def extract_candidates_from_json_blob(text: str) -> list[dict]:
+    found: dict[str, dict] = {}
+
+    def add_candidate(url: str, title: str = "", context: str = "") -> None:
+        canonical = make_absolute_content_url(url)
+        if not CONTENT_URL_RE.match(canonical):
+            return
+        item = found.get(canonical, {"href": canonical, "title": "", "context": ""})
+        if title and len(title) > len(item["title"]):
+            item["title"] = title[:240]
+        if context and len(context) > len(item["context"]):
+            item["context"] = context[:600]
+        found[canonical] = item
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            url_fields = [
+                node.get("url"),
+                node.get("target"),
+                node.get("target_url"),
+                node.get("link"),
+                node.get("shareUrl"),
+                node.get("schema"),
+            ]
+            title = str(
+                node.get("title")
+                or node.get("name")
+                or node.get("question_text")
+                or node.get("headline")
+                or ""
+            ).strip()
+            context = str(
+                node.get("excerpt")
+                or node.get("description")
+                or node.get("content")
+                or node.get("highlight")
+                or ""
+            ).strip()
+            for url in url_fields:
+                if url:
+                    add_candidate(str(url), title, context)
+
+            question_id = node.get("question_id") or node.get("questionId")
+            answer_id = node.get("answer_id") or node.get("answerId")
+            article_id = node.get("article_id") or node.get("articleId")
+            item_id = node.get("id")
+            item_type = str(node.get("type") or node.get("object_type") or "").lower()
+            if question_id and answer_id:
+                add_candidate(f"https://www.zhihu.com/question/{question_id}/answer/{answer_id}", title, context)
+            elif question_id:
+                add_candidate(f"https://www.zhihu.com/question/{question_id}", title, context)
+            elif article_id:
+                add_candidate(f"https://zhuanlan.zhihu.com/p/{article_id}", title, context)
+            elif item_id and item_type in {"question", "answer", "article"}:
+                if item_type == "question":
+                    add_candidate(f"https://www.zhihu.com/question/{item_id}", title, context)
+                elif item_type == "article":
+                    add_candidate(f"https://zhuanlan.zhihu.com/p/{item_id}", title, context)
+
+            for value in node.values():
+                walk(value)
+            return
+
+        if isinstance(node, list):
+            for value in node:
+                walk(value)
+            return
+
+        if isinstance(node, str):
+            for match in re.finditer(
+                r"(?:https?:)?//(?:www\.zhihu\.com/question/\d+(?:/answer/\d+)?|zhuanlan\.zhihu\.com/p/\d+)|/(?:question/\d+(?:/answer/\d+)?|p/\d+)",
+                node,
+            ):
+                add_candidate(match.group(0))
+
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+    walk(payload)
+    return list(found.values())
+
+
+def extract_candidates_from_html(page) -> list[dict]:
+    html = page.content()
+    found = []
+    seen = set()
+    for match in re.finditer(r"https?://(?:www\.zhihu\.com/question/\d+(?:/answer/\d+)?|zhuanlan\.zhihu\.com/p/\d+)", html):
+        url = canonical_url(unescape(match.group(0)))
+        if url in seen:
+            continue
+        seen.add(url)
+        found.append(
+            {
+                "href": url,
+                "title": "",
+                "context": "",
+            }
+        )
+    return found
+
+
+def extract_embedded_state_candidates(page) -> list[dict]:
+    found: dict[str, dict] = {}
+    for selector in ['script[id="js-initialData"]', 'script[data-zop-usertoken]', 'script[type="application/json"]']:
+        locator = page.locator(selector)
+        count = min(locator.count(), 8)
+        for idx in range(count):
+            try:
+                text = locator.nth(idx).inner_text(timeout=800)
+            except Exception:
+                continue
+            if not text or "question" not in text and "zhuanlan.zhihu.com" not in text:
+                continue
+            for item in extract_candidates_from_json_blob(text):
+                found[item["href"]] = item
+    return list(found.values())
+
+
+def trigger_more_loading(page, page_delay_ms: int) -> None:
+    for selector in [
+        'button:has-text("加载更多")',
+        'button:has-text("更多")',
+        'div[role="button"]:has-text("加载更多")',
+    ]:
+        locator = page.locator(selector)
+        count = min(locator.count(), 3)
+        for idx in range(count):
+            try:
+                locator.nth(idx).click(timeout=800)
+                page.wait_for_timeout(300)
+            except Exception:
+                continue
+
+    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    page.wait_for_timeout(page_delay_ms)
+    page.keyboard.press("PageDown")
+    page.wait_for_timeout(300)
+    page.keyboard.press("End")
+    page.wait_for_timeout(300)
+
+
+def normalize_candidates(items: list[dict]) -> list[dict]:
+    out: dict[str, dict] = {}
+    for item in items:
+        url = canonical_url(item.get("href", ""))
+        if not CONTENT_URL_RE.match(url):
+            continue
+        existing = out.get(url, {"href": url, "title": "", "context": ""})
+        title = str(item.get("title", "")).strip()
+        context = str(item.get("context", "")).strip()
+        if title and len(title) > len(existing["title"]):
+            existing["title"] = title[:240]
+        if context and len(context) > len(existing["context"]):
+            existing["context"] = context[:600]
+        out[url] = existing
+    return list(out.values())
+
+
+def extract_search_results(page, max_items: int, max_scrolls: int, no_new_stop: int, page_delay_ms: int, network_candidates: dict[str, dict]) -> list[dict]:
     seen: dict[str, dict] = {}
     no_new_rounds = 0
     last_height = 0
     for round_no in range(1, max_scrolls + 1):
         click_expand_buttons(page)
-        candidates = collect_result_candidates(page)
+        trigger_more_loading(page, page_delay_ms)
+        candidates = normalize_candidates(
+            collect_result_candidates(page)
+            + extract_candidates_from_html(page)
+            + extract_embedded_state_candidates(page)
+            + list(network_candidates.values())
+        )
         new_items = 0
         for item in candidates:
             url = canonical_url(item.get("href", ""))
@@ -120,7 +316,7 @@ def extract_search_results(page, max_items: int, max_scrolls: int, no_new_stop: 
         if len(seen) >= max_items:
             break
         no_new_rounds = 0 if new_items else no_new_rounds + 1
-        page.mouse.wheel(0, 2600)
+        page.mouse.wheel(0, 3600)
         page.wait_for_timeout(page_delay_ms)
         new_height = page.evaluate("document.body.scrollHeight")
         if new_height == last_height and no_new_rounds >= no_new_stop:
@@ -209,10 +405,38 @@ def main() -> int:
         )
         context.add_cookies(cookies)
         page = context.new_page()
+        network_candidates: dict[str, dict] = {}
+
+        def on_response(response) -> None:
+            try:
+                content_type = response.headers.get("content-type", "")
+            except Exception:
+                content_type = ""
+            if "zhihu.com" not in response.url:
+                return
+            if "json" not in content_type and not any(token in response.url for token in ["/api/", "/graphql", "search_v3"]):
+                return
+            try:
+                text = response.text()
+            except Exception:
+                return
+            if not text or ("question" not in text and "zhuanlan" not in text):
+                return
+            for item in extract_candidates_from_json_blob(text):
+                network_candidates[item["href"]] = item
+
+        page.on("response", on_response)
         page.goto(search_url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(args.page_delay_ms)
         detect_risk_or_login(page)
-        stage1_items = extract_search_results(page, args.max_items, args.max_scrolls, args.no_new_stop, args.page_delay_ms)
+        stage1_items = extract_search_results(
+            page,
+            args.max_items,
+            args.max_scrolls,
+            args.no_new_stop,
+            args.page_delay_ms,
+            network_candidates,
+        )
         if not stage1_items:
             raise RuntimeError("没有抓到任何搜索结果，请检查 Cookie 是否有效")
         write_json(run_dir / "results_stage1.json", {"keyword": args.keyword, "search_url": search_url, "results": stage1_items})
@@ -245,4 +469,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

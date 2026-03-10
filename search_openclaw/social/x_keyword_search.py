@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from playwright.sync_api import TimeoutError, sync_playwright
+from playwright.sync_api import Error, TimeoutError, sync_playwright
 
 from search_openclaw.social.browser_config import get_browser_args, get_context_options
 from search_openclaw.social.reporting import build_simple_html, safe_name, write_csv, write_json, write_markdown_summary
@@ -51,6 +52,49 @@ def parse_count(raw: str) -> int:
     return int(value * multiplier)
 
 
+def parse_network_result(result: dict) -> dict | None:
+    legacy = result.get("legacy") or {}
+    tweet_id = result.get("rest_id") or legacy.get("id_str")
+    text = legacy.get("full_text") or ""
+    if not tweet_id or not text:
+        return None
+    core = ((result.get("core") or {}).get("user_results") or {}).get("result") or {}
+    user_legacy = core.get("legacy") or {}
+    handle = user_legacy.get("screen_name") or ""
+    url = f"https://x.com/{handle}/status/{tweet_id}" if handle else f"https://x.com/i/web/status/{tweet_id}"
+    views = (result.get("views") or {}).get("count")
+    view_count = int(views) if isinstance(views, str) and views.isdigit() else (views if isinstance(views, int) else 0)
+    return {
+        "tweet_id": str(tweet_id),
+        "user_handle": handle,
+        "url": url,
+        "text": text,
+        "posted_at": legacy.get("created_at", ""),
+        "reply_count": int(legacy.get("reply_count") or 0),
+        "retweet_count": int(legacy.get("retweet_count") or 0),
+        "like_count": int(legacy.get("favorite_count") or 0),
+        "bookmark_count": int(legacy.get("bookmark_count") or 0),
+        "view_count": view_count,
+    }
+
+
+def walk_collect_network(obj, out: list[dict]) -> None:
+    if isinstance(obj, dict):
+        tweet_results = obj.get("tweet_results")
+        if isinstance(tweet_results, dict):
+            result = tweet_results.get("result")
+            if isinstance(result, dict):
+                item = parse_network_result(result)
+                if item:
+                    out.append(item)
+        for value in obj.values():
+            walk_collect_network(value, out)
+        return
+    if isinstance(obj, list):
+        for value in obj:
+            walk_collect_network(value, out)
+
+
 def create_context(playwright, state_path: str, headless: bool):
     browser = playwright.chromium.launch(headless=headless, args=get_browser_args())
     options = get_context_options()
@@ -66,6 +110,21 @@ def validate_auth_state(page) -> bool:
         return True
     except TimeoutError:
         return False
+
+
+def goto_with_retry(page, url: str, attempts: int = 3) -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=120000)
+            return
+        except Error as exc:
+            last_error = exc
+            if attempt >= attempts:
+                break
+            page.wait_for_timeout(1500 * attempt)
+    if last_error:
+        raise last_error
 
 
 def parse_status_href(href: str) -> tuple[str | None, str | None]:
@@ -118,20 +177,45 @@ def extract_tweet(article) -> dict | None:
     }
 
 
-def collect_tweets(page, max_items: int, max_scrolls: int, no_new_stop: int, scroll_pause: int) -> list[dict]:
+def merge_tweet(existing: dict, incoming: dict) -> dict:
+    merged = dict(existing)
+    for key, value in incoming.items():
+        if key in {"reply_count", "retweet_count", "like_count", "bookmark_count", "view_count"}:
+            merged[key] = max(int(merged.get(key, 0) or 0), int(value or 0))
+        elif value and (not merged.get(key) or len(str(value)) > len(str(merged.get(key, "")))):
+            merged[key] = value
+    return merged
+
+
+def collect_tweets(
+    page,
+    max_items: int,
+    max_scrolls: int,
+    no_new_stop: int,
+    scroll_pause: int,
+    network_items: dict[str, dict],
+) -> list[dict]:
     seen_ids: set[str] = set()
     items: list[dict] = []
+    items_by_id: dict[str, dict] = {}
     no_new_rounds = 0
     last_height = 0
 
     for round_no in range(1, max_scrolls + 1):
         new_items = 0
+        batch = list(network_items.values())
         for article in page.query_selector_all('article[data-testid="tweet"]'):
             tweet = extract_tweet(article)
+            if tweet:
+                batch.append(tweet)
+        for tweet in batch:
             if not tweet or tweet["tweet_id"] in seen_ids:
+                if tweet and tweet["tweet_id"] in items_by_id:
+                    items_by_id[tweet["tweet_id"]].update(merge_tweet(items_by_id[tweet["tweet_id"]], tweet))
                 continue
             seen_ids.add(tweet["tweet_id"])
-            items.append(tweet)
+            items_by_id[tweet["tweet_id"]] = tweet
+            items.append(items_by_id[tweet["tweet_id"]])
             new_items += 1
             if len(items) >= max_items:
                 break
@@ -157,7 +241,11 @@ def write_outputs(run_dir: Path, keyword: str, search_url: str, rows: list[dict]
     }
     write_json(run_dir / "results_stage1.json", payload)
     write_json(run_dir / "results.json", payload)
-    write_csv(run_dir / "results.csv", rows, ["tweet_id", "user_handle", "url", "posted_at", "reply_count", "retweet_count", "like_count", "bookmark_count", "text"])
+    write_csv(
+        run_dir / "results.csv",
+        rows,
+        ["tweet_id", "user_handle", "url", "posted_at", "reply_count", "retweet_count", "like_count", "bookmark_count", "view_count", "text"],
+    )
     write_markdown_summary(
         run_dir / "summary.md",
         f"X keyword search - {keyword}",
@@ -183,11 +271,33 @@ def main() -> int:
     with sync_playwright() as p:
         context = create_context(p, args.state, args.headless)
         page = context.new_page()
-        page.goto(search_url, wait_until="domcontentloaded", timeout=120000)
+        network_items: dict[str, dict] = {}
+
+        def on_response(response) -> None:
+            if "/SearchTimeline?" not in response.url:
+                return
+            try:
+                text = response.text()
+            except Exception:
+                return
+            if not text:
+                return
+            try:
+                data = json.loads(text)
+            except Exception:
+                return
+            batch: list[dict] = []
+            walk_collect_network(data, batch)
+            for item in batch:
+                existing = network_items.get(item["tweet_id"])
+                network_items[item["tweet_id"]] = merge_tweet(existing or {}, item) if existing else item
+
+        page.on("response", on_response)
+        goto_with_retry(page, search_url)
         page.wait_for_timeout(3000)
         if not validate_auth_state(page):
             raise RuntimeError("X 登录态无效，请先重新执行 login-x")
-        items = collect_tweets(page, args.max_items, args.max_scrolls, args.no_new_stop, args.scroll_pause)
+        items = collect_tweets(page, args.max_items, args.max_scrolls, args.no_new_stop, args.scroll_pause, network_items)
         context.close()
 
     if not items:
@@ -203,4 +313,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
