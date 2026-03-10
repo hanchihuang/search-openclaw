@@ -1,13 +1,74 @@
 # Search OpenClaw
 
-> 给 OpenClaw 配好搜索能力的资料库。  
-> 聚焦 `Web Search`、免费优先路线、多搜索源组合，以及适合 Agent 的搜索 API 选型。
+> Search infrastructure and CLI scaffolding for OpenClaw.  
+> Focused on `Web Search`, provider selection, multi-search fallback, and practical agent-friendly search workflows.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
-![Docs](https://img.shields.io/badge/docs-Chinese-blue)
+![Docs](https://img.shields.io/badge/docs-English%20%2B%20Chinese-blue)
 ![Topic](https://img.shields.io/badge/OpenClaw-Web%20Search-orange)
 
-快速开始 · [Web Search](./docs/web-search.md) · [搜索路线](./docs/search-routes.md) · [Contributing](./CONTRIBUTING.md)
+English · [中文](#中文版) · [Web Search](./docs/web-search.md) · [Search Routes](./docs/search-routes.md) · [Contributing](./CONTRIBUTING.md)
+
+## English
+
+Search OpenClaw helps you set up the search layer for OpenClaw instead of treating search as an afterthought.
+
+It currently includes:
+
+- a CLI to configure providers such as Brave, Tavily, Exa, Perplexity, GitHub, and iFlow
+- `doctor` checks for your current search stack
+- `doctor --fix` to install the skill and auto-detect local integrations
+- direct search commands
+- iFlow reuse from your local OpenClaw config
+- one-command wrappers around the local `x_search_aggregator` repo for X and Zhihu keyword scraping
+
+### Quick Start
+
+```bash
+search-openclaw install
+search-openclaw doctor --fix
+search-openclaw search "latest AI developments"
+search-openclaw search "OpenClaw search setup" --provider iflow --stream
+search-openclaw scrape-social "AI Agent" --platform both
+```
+
+### Why this repo exists
+
+Most agent users do not fail because the model is weak. They fail because the search layer is badly configured:
+
+- no reliable web search
+- poor result structure
+- no fallback provider
+- weak handling of time-sensitive information
+
+Search OpenClaw is built to make that layer explicit and usable.
+
+### Provider Guidance
+
+- If you have a card and want the safest default, start with `Brave`
+- If you want lower friction and no card, start with `Tavily`
+- If you want semantic search or lower cost experiments, add `Exa`
+- If you already run OpenClaw with `iFlow`, Search OpenClaw can reuse that local key automatically
+- If you care about resilience, combine at least two providers
+
+### Social Search Wrappers
+
+If you already have the local repo [`x_search_aggregator`](https://github.com/hhchhchhchhc/x_search_aggregator), Search OpenClaw can wrap it directly:
+
+- `search-openclaw login-x`
+- `search-openclaw scrape-social "AI Agent" --platform x`
+- `search-openclaw scrape-social "AI Agent" --platform zhihu`
+- `search-openclaw scrape-social "AI Agent" --platform both`
+
+### Notes
+
+- `iFlow` is currently used as a research-brief / structured-summary route, not a traditional web search engine
+- Zhihu scraping still requires a valid cookie
+- X scraping still requires a valid logged-in browser state
+
+---
+
+## 中文版
 
 ## CLI 快速开始
 
