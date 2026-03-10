@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="${VENV_DIR:-$ROOT/.venv}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+TARGET="${TARGET:-both}"
 
 echo "==> Search OpenClaw one-click installer"
 echo "repo: $ROOT"
@@ -56,19 +57,42 @@ if [ "${LOGIN_X:-0}" = "1" ]; then
   search-openclaw login-x
 fi
 
-cat <<'EOF'
-
-Install complete.
-
-Try these next:
-  1. search-openclaw configure brave_api_key <YOUR_KEY>
-  2. search-openclaw doctor
-  3. search-openclaw search "latest AI agent news"
-  4. search-openclaw login-x
-  5. search-openclaw scrape-social "AI Agent" --platform both
-
-Or use the wrapper:
+echo
+echo "Install complete."
+echo
+echo "Suggested next step for TARGET=$TARGET:"
+case "$TARGET" in
+  x)
+    cat <<'EOF'
+  ./scripts/start.sh login-x
+  ./scripts/start.sh scrape-social "AI Agent" --platform x --max-items 200 --max-scrolls 80
+EOF
+    ;;
+  zhihu)
+    cat <<'EOF'
+  ./scripts/start.sh scrape-social "AI Agent" --platform zhihu --max-items 220 --max-scrolls 160 --no-new-stop 24 --page-delay-ms 1300 --stage1-only
+EOF
+    ;;
+  both)
+    cat <<'EOF'
+  ./scripts/start.sh login-x
+  ./scripts/start.sh scrape-social "AI Agent" --platform x --max-items 200 --max-scrolls 80
+  ./scripts/start.sh scrape-social "AI Agent" --platform zhihu --max-items 220 --max-scrolls 160 --no-new-stop 24 --page-delay-ms 1300 --stage1-only
+EOF
+    ;;
+  *)
+    cat <<'EOF'
   ./scripts/start.sh doctor
   ./scripts/start.sh search "OpenClaw search setup"
+EOF
+    ;;
+esac
+
+cat <<'EOF'
+
+You can also rerun:
+  TARGET=x ./scripts/install.sh
+  TARGET=zhihu ./scripts/install.sh
+  TARGET=both ./scripts/install.sh
   LOGIN_X=1 ./scripts/install.sh
 EOF

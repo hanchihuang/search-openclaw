@@ -12,6 +12,22 @@
 
 English · [中文](#中文版) · [Web Search](./docs/web-search.md) · [Search Routes](./docs/search-routes.md) · [FAQ](./docs/faq.md) · [Contributing](./CONTRIBUTING.md)
 
+## OpenClaw Copy-Paste
+
+```bash
+git clone https://github.com/hanchihuang/search-openclaw.git && cd search-openclaw && BRAVE_API_KEY="<YOUR_KEY>" ZHIHU_COOKIE="<YOUR_COOKIE>" SMOKE_TEST=1 TARGET=both ./scripts/install.sh
+./scripts/start.sh login-x
+./scripts/start.sh scrape-social "AI Agent" --platform x --max-items 200 --max-scrolls 80
+./scripts/start.sh scrape-social "AI Agent" --platform zhihu --max-items 220 --max-scrolls 160 --no-new-stop 24 --page-delay-ms 1300 --stage1-only
+```
+
+If you only care about one side:
+
+```bash
+TARGET=x ./scripts/install.sh
+TARGET=zhihu ./scripts/install.sh
+```
+
 ## English
 
 Search OpenClaw is a practical search layer for OpenClaw:
@@ -190,6 +206,14 @@ git clone https://github.com/hanchihuang/search-openclaw.git && cd search-opencl
 
 ```bash
 git clone https://github.com/hanchihuang/search-openclaw.git && cd search-openclaw && BRAVE_API_KEY="<YOUR_KEY>" ZHIHU_COOKIE="<YOUR_COOKIE>" SMOKE_TEST=1 ./scripts/install.sh
+```
+
+如果你只打算先打通其中一条，也可以让安装器按目标给出对应下一步：
+
+```bash
+TARGET=x ./scripts/install.sh
+TARGET=zhihu ./scripts/install.sh
+TARGET=both ./scripts/install.sh
 ```
 
 如果你只想复制已经验证过的命令，优先用这两条：
